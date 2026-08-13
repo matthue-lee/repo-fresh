@@ -25,13 +25,17 @@ Then track some repos and start the daily sweep:
 ```bash
 repo-fresh add ~/code/my-project
 repo-fresh add ~/code/some-worktree
-brew services start repo-fresh     # runs daily at 07:00
+brew services start repo-fresh     # activate: runs daily at 07:00
 repo-fresh run                     # or fast-forward everything right now
 repo-fresh status                  # tracked repos + last-run summary
 ```
 
+The Homebrew install runs on a fixed **daily 07:00** schedule. Want a different
+hour or an interval? Use the from-source install below **instead of** Homebrew —
+pick one method, not both (two schedulers would double up).
+
 <details>
-<summary><strong>From source</strong> (no Homebrew, or you want a custom schedule)</summary>
+<summary><strong>From source</strong> (no Homebrew, or you want to choose the schedule)</summary>
 
 ```bash
 git clone https://github.com/matthue-lee/repo-fresh.git
