@@ -14,13 +14,33 @@ find your local branch is 40 commits behind.
 
 ## Install (macOS)
 
+**Homebrew — easiest:**
+
 ```bash
-git clone https://github.com/<you>/repo-fresh.git
+brew install matthue-lee/tap/repo-fresh
+```
+
+Then track some repos and start the daily sweep:
+
+```bash
+repo-fresh add ~/code/my-project
+repo-fresh add ~/code/some-worktree
+brew services start repo-fresh     # runs daily at 07:00
+repo-fresh run                     # or fast-forward everything right now
+repo-fresh status                  # tracked repos + last-run summary
+```
+
+<details>
+<summary><strong>From source</strong> (no Homebrew, or you want a custom schedule)</summary>
+
+```bash
+git clone https://github.com/matthue-lee/repo-fresh.git
 cd repo-fresh
 ./install.sh
 ```
 
-It asks how often to run — a **daily hour** or an **interval in minutes**:
+`install.sh` asks how often to run — a **daily hour** or an **interval in
+minutes** — and sets up the LaunchAgent itself (no `brew services` needed):
 
 ```bash
 # non-interactive equivalents
@@ -28,17 +48,10 @@ SCHEDULE=daily    HOUR=7      ./install.sh
 SCHEDULE=interval MINUTES=60  ./install.sh
 ```
 
-Then tell it which repos to keep fresh:
-
-```bash
-repo-fresh add ~/code/my-project
-repo-fresh add ~/code/some-worktree
-repo-fresh run        # fast-forward everything right now
-repo-fresh status     # schedule, tracked repos, last-run summary
-```
-
 > If the installer warns that `~/.local/bin` isn't on your `PATH`, add
 > `export PATH="$HOME/.local/bin:$PATH"` to your `~/.zshrc` and restart the shell.
+
+</details>
 
 ## Commands
 
