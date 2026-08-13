@@ -25,7 +25,9 @@ SUPPORT_DIR="$HOME/Library/Application Support/repo-fresh"
 REPOS_FILE="$SUPPORT_DIR/repos"
 CONFIG="$SUPPORT_DIR/config"
 LOG="$SUPPORT_DIR/repo-fresh.log"
-WORKER="$SUPPORT_DIR/repo-fresh.sh"
+# Worker lives beside the config for a standalone install, or wherever a
+# packager points us via RF_WORKER (e.g. Homebrew installs it under libexec).
+WORKER="${RF_WORKER:-$SUPPORT_DIR/repo-fresh.sh}"
 
 die() { echo "${RED}✗${RST} repo-fresh: $*" >&2; exit 1; }
 
