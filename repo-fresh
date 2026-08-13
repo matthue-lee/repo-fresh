@@ -1,0 +1,184 @@
+#!/bin/bash
+# repo-fresh — manage and run the repo-fresh daily fast-forward job.
+#
+#   repo-fresh add <path>      add a git repo/worktree to the keep-fresh list
+#   repo-fresh remove <path>   remove one from the list
+#   repo-fresh list            show configured repos with branch + ahead/behind
+#   repo-fresh status          show schedule, repo count, and last-run summary
+#   repo-fresh run             fast-forward everything now (also records to log)
+#
+# No sudo needed — everything lives under your home directory.
+
+set -uo pipefail
+
+# --- colors (only on a real terminal; honor the NO_COLOR standard) -----------
+# ACC = accent (bold bright green); GRN = success glyph; others as named.
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+  BOLD=$'\033[1m'; DIM=$'\033[2m'; RED=$'\033[31m'; GRN=$'\033[92m'
+  YLW=$'\033[33m'; ACC=$'\033[1;92m'; RST=$'\033[0m'
+else
+  BOLD=; DIM=; RED=; GRN=; YLW=; ACC=; RST=
+fi
+
+LABEL="com.local.repo-fresh"
+SUPPORT_DIR="$HOME/Library/Application Support/repo-fresh"
+REPOS_FILE="$SUPPORT_DIR/repos"
+CONFIG="$SUPPORT_DIR/config"
+LOG="$SUPPORT_DIR/repo-fresh.log"
+WORKER="$SUPPORT_DIR/repo-fresh.sh"
+
+die() { echo "${RED}✗${RST} repo-fresh: $*" >&2; exit 1; }
+
+# Resolve to a canonical absolute path (macOS has no coreutils realpath by default).
+abspath() { ( cd "$1" 2>/dev/null && pwd -P ); }
+
+ensure_support() { mkdir -p "$SUPPORT_DIR"; touch "$REPOS_FILE"; }
+
+# Colorize a stream of worker output lines (no-op when colors are disabled).
+paint() {
+  local l
+  while IFS= read -r l || [ -n "$l" ]; do
+    case "$l" in
+      *"===== "*)        printf '%s%s%s\n' "$DIM" "$l" "$RST" ;;
+      *"] updated"*)     printf '%s%s%s\n' "$GRN" "$l" "$RST" ;;
+      *"] up to date"*)  printf '%s%s%s\n' "$DIM" "$l" "$RST" ;;
+      *FAILED*)          printf '%s%s%s\n' "$RED" "$l" "$RST" ;;
+      *"] SKIP"*)        printf '%s%s%s\n' "$YLW" "$l" "$RST" ;;
+      *)                 printf '%s\n' "$l" ;;
+    esac
+  done
+}
+
+cmd_add() {
+  [ -n "${1:-}" ] || die "usage: repo-fresh add <path>"
+  local abs
+  abs="$(abspath "$1")" || true
+  [ -n "$abs" ] && [ -d "$abs" ] || die "no such directory: $1"
+  git -C "$abs" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+    || die "not a git repo/worktree: $abs"
+  ensure_support
+  local name branch
+  name="$(basename "$abs")"
+  branch="$(git -C "$abs" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+  [ "$branch" = "HEAD" ] && branch="detached"
+  if grep -qxF "$abs" "$REPOS_FILE" 2>/dev/null; then
+    echo "${DIM}already tracked:${RST} ${BOLD}$name${RST} ${DIM}($branch)${RST}"; return 0
+  fi
+  printf '%s\n' "$abs" >> "$REPOS_FILE"
+  echo "${GRN}✓${RST} ${BOLD}added${RST} ${BOLD}$name${RST} ${DIM}($branch)${RST}"
+}
+
+cmd_remove() {
+  [ -n "${1:-}" ] || die "usage: repo-fresh remove <path>"
+  ensure_support
+  local abs
+  abs="$(abspath "$1")" || true
+  [ -n "$abs" ] || abs="$1"   # allow removing a stale path that no longer exists
+  if ! grep -qxF "$abs" "$REPOS_FILE" 2>/dev/null; then
+    echo "${DIM}not tracked:${RST} $(basename "$abs")"; return 0
+  fi
+  local tmp; tmp="$(mktemp)"
+  # `grep -v` exits 1 when it filters out every line (empty result) — that's
+  # success for us (removed the only repo), so don't gate the move on it.
+  grep -vxF "$abs" "$REPOS_FILE" > "$tmp" || true
+  mv "$tmp" "$REPOS_FILE"
+  echo "${RED}− removed${RST} ${BOLD}$(basename "$abs")${RST}"
+}
+
+# One formatted line per repo: "● name  branch  ↑ahead ↓behind"
+# Dot color is meaningful: green = fresh (nothing to pull), yellow = behind or
+# no upstream, red = missing / not a repo.
+list_repo_line() {
+  local dir="$1" name branch counts behind ahead extra dot
+  name="$(basename "$dir")"
+  if ! git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    printf '  %s●%s %s%-20s%s %s(missing / not a repo)%s\n' "$RED" "$RST" "$BOLD" "$name" "$RST" "$RED" "$RST"
+    return
+  fi
+  branch="$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+  [ "$branch" = "HEAD" ] && branch="detached"
+  if counts="$(git -C "$dir" rev-list --left-right --count '@{u}...HEAD' 2>/dev/null)"; then
+    behind="$(echo "$counts" | awk '{print $1}')"
+    ahead="$(echo "$counts" | awk '{print $2}')"
+    local a_s b_s
+    [ "$ahead"  != 0 ] && a_s="${YLW}↑${ahead}${RST}"  || a_s="${DIM}↑0${RST}"
+    [ "$behind" != 0 ] && b_s="${YLW}↓${behind}${RST}" || b_s="${DIM}↓0${RST}"
+    extra="$a_s $b_s"
+    [ "$behind" = 0 ] && dot="$GRN" || dot="$YLW"
+  else
+    extra="${DIM}no upstream${RST}"; dot="$YLW"
+  fi
+  printf '  %s●%s %s%-20s%s %-8s %s\n' "$dot" "$RST" "$BOLD" "$name" "$RST" "$branch" "$extra"
+}
+
+cmd_list() {
+  ensure_support
+  local any=0
+  while IFS= read -r dir || [ -n "$dir" ]; do
+    case "$dir" in ''|\#*) continue ;; esac
+    any=1
+    list_repo_line "$dir"
+  done < "$REPOS_FILE"
+  [ "$any" -eq 1 ] || echo "  ${DIM}(none — add one with: repo-fresh add <path>)${RST}"
+}
+
+cmd_status() {
+  ensure_support
+  local sched="unknown"
+  [ -f "$CONFIG" ] && . "$CONFIG" 2>/dev/null
+  sched="${SCHEDULE_DESC:-unknown}"
+
+  echo "${ACC}repo-fresh${RST}"
+  printf '  %sschedule%s   %s\n' "$BOLD" "$RST" "$sched"
+  printf '  %srepos%s\n' "$BOLD" "$RST"
+  cmd_list | sed 's/^/  /'
+  printf '  %slast run%s\n' "$BOLD" "$RST"
+  if [ -s "$LOG" ]; then
+    # Show the most recent run block (from the last '=====' header onward).
+    awk '/^===== /{buf=""} {buf=buf $0 "\n"} END{printf "%s", buf}' "$LOG" | sed 's/^/    /' | paint
+  else
+    echo "    ${DIM}(never run yet — try: repo-fresh run)${RST}"
+  fi
+}
+
+cmd_run() {
+  [ -x "$WORKER" ] || die "worker not installed at $WORKER (run install.sh)"
+  ensure_support
+  # Plain text to the log; colorized to the terminal.
+  local out; out="$("$WORKER")"
+  printf '%s\n' "$out" >> "$LOG"
+  printf '%s\n' "$out" | paint
+}
+
+cmd_help() {
+  echo "${ACC}repo-fresh${RST} ${DIM}— keep your git repos fast-forwarded${RST}"
+  echo
+  echo "${BOLD}Usage${RST}"
+  echo "  repo-fresh <command> [path]"
+  echo
+  echo "${BOLD}Commands${RST}"
+  echo "  ${ACC}add${RST} <path>       track a git repo/worktree"
+  echo "  ${ACC}remove${RST} <path>    stop tracking one"
+  echo "  ${ACC}list${RST}             tracked repos with branch + ahead/behind"
+  echo "  ${ACC}status${RST}           schedule, repos, and last run ${DIM}(default)${RST}"
+  echo "  ${ACC}run${RST}              fast-forward everything now"
+  echo "  ${ACC}--help${RST}           show this help"
+  echo
+  echo "${BOLD}Status dots${RST}"
+  echo "  ${GRN}●${RST} fresh — nothing to pull"
+  echo "  ${YLW}●${RST} behind, or no upstream to track"
+  echo "  ${RED}●${RST} path missing / not a git repo"
+  echo
+  echo "${DIM}No sudo. Config, repo list, and log live in${RST}"
+  echo "${DIM}~/Library/Application Support/repo-fresh/. Runs on a schedule via a LaunchAgent.${RST}"
+}
+
+case "${1:-status}" in
+  add)    shift; cmd_add "$@" ;;
+  remove|rm) shift; cmd_remove "$@" ;;
+  list|ls)   cmd_list ;;
+  status)    cmd_status ;;
+  run)       cmd_run ;;
+  -h|--help|help) cmd_help ;;
+  *) echo "usage: repo-fresh {add|remove|list|status|run} [path]" >&2; exit 2 ;;
+esac

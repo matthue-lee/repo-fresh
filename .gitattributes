@@ -1,0 +1,7 @@
+# The user-facing CLI has no extension; tell GitHub Linguist it's a shell
+# script so it's syntax-highlighted and counted as Shell, not "no language".
+repo-fresh linguist-language=Shell
+
+# Keep shell scripts LF-only regardless of contributor platform.
+*.sh    text eol=lf
+repo-fresh text eol=lf

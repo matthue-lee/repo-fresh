@@ -1,0 +1,6 @@
+{
+  "//": "Highlight the extensionless CLI as a shell script in this workspace.",
+  "files.associations": {
+    "repo-fresh": "shellscript"
+  }
+}
